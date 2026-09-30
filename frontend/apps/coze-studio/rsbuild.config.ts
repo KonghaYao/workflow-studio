@@ -23,6 +23,32 @@ const API_PROXY_TARGET = `http://localhost:${
   process.env.WEB_SERVER_PORT || 8888
 }/`;
 
+/** 归一化为「前导斜杠 + 结尾斜杠」的路径前缀；未设置或为 '/' 时返回 '/'。 */
+const normalizeWorkflowCanvasBase = (raw: string | undefined): string => {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed || trimmed === '/') {
+    return '/';
+  }
+  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`;
+};
+
+/**
+ * 画布子路径挂载：整包 SPA 由宿主以 iframe 形式挂在同源的 /workflow-canvas 下。
+ * 资源前缀（output.assetPrefix）与路由 basename（source.define 的 ROUTER_BASENAME）必须取同一值，
+ * 只改其一都会白屏；默认 '/' 时两者都等同于改造前行为，Coze 独立部署不受影响。
+ * 依据：fenix 仓 docs/design/2026-09-29-workflow-v2-coze-frontend-changes.md §4。
+ */
+const workflowCanvasBase = normalizeWorkflowCanvasBase(
+  process.env.WORKFLOW_CANVAS_BASE,
+);
+/** react-router basename 不带结尾斜杠（'/' 除外）。 */
+const routerBasename =
+  workflowCanvasBase === '/' ? '/' : workflowCanvasBase.slice(0, -1);
+
+/** 开发态把画布 BFF 请求转给 fenix 侧 workflow-v2；路径与生产一致，不做 rewrite。 */
+const WORKFLOW_BFF_PROXY_TARGET =
+  process.env.WORKFLOW_CANVAS_BFF_PROXY_TARGET || 'http://127.0.0.1:8888';
+
 const mergedConfig = defineConfig({
   server: {
     strictPort: true,
@@ -39,6 +65,13 @@ const mergedConfig = defineConfig({
         secure: false,
         changeOrigin: true,
       },
+      {
+        // 画布内请求统一走宿主同源 BFF（票据兑换 + workflow 透传），本地联调转发到 fenix。
+        context: ['/workflow-canvas/bff'],
+        target: WORKFLOW_BFF_PROXY_TARGET,
+        secure: false,
+        changeOrigin: true,
+      },
     ],
   },
   html: {
@@ -46,6 +79,10 @@ const mergedConfig = defineConfig({
     favicon: './assets/favicon.png',
     template: './index.html',
     crossorigin: 'anonymous',
+  },
+  output: {
+    // 子路径挂载时静态资源（含 favicon、动态 chunk）必须带同一前缀，否则 404 白屏。
+    assetPrefix: workflowCanvasBase,
   },
   tools: {
     postcss: (opts, { addPlugins }) => {
@@ -103,6 +140,8 @@ const mergedConfig = defineConfig({
       'process.env.RUNTIME_ENTRY': JSON.stringify('@coze-dev/runtime'),
       'process.env.TARO_ENV': JSON.stringify('h5'),
       ENABLE_COVERAGE: JSON.stringify(false),
+      // 路由 basename，与 output.assetPrefix 同值（见 workflowCanvasBase 注释）。
+      ROUTER_BASENAME: JSON.stringify(routerBasename),
     },
     include: [
       path.resolve(__dirname, '../../packages'),

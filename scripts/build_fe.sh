@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+#
+# Copyright 2025 coze-dev Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}/.."
@@ -7,6 +23,10 @@ FRONTEND_DIR="${ROOT_DIR}/frontend"
 set -ex
 
 source "${SCRIPT_DIR}/setup_fe.sh"
+
+# 画布子路径挂载：WORKFLOW_CANVAS_BASE=/workflow-canvas/ 时资源前缀与路由 basename 同时切到子路径；
+# 缺省 '/' 与改造前行为一致，Coze 独立部署不受影响。
+export WORKFLOW_CANVAS_BASE="${WORKFLOW_CANVAS_BASE:-/}"
 
 pushd "${FRONTEND_DIR}"
 
