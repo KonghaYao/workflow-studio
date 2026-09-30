@@ -18,18 +18,11 @@ import 'reflect-metadata';
 import React, { useRef, useState } from 'react';
 
 import { WorkflowPlayground } from '@coze-workflow/playground/workflow-playground';
-import {
-  type AddNodeRef,
-  type WorkflowPlaygroundRef,
-} from '@coze-workflow/playground/typing';
+import { type WorkflowPlaygroundRef } from '@coze-workflow/playground/typing';
+import { NodeSidebar } from '@coze-workflow/playground';
 
 import { usePageParams } from './hooks/use-page-params';
 import { useNavigateBack } from './hooks';
-
-// The added node is placed in the toolbar, but the original sidebar is no longer needed.
-const EmptySidebar = React.forwardRef<AddNodeRef, unknown>(
-  (_props, _addNodeRef) => null,
-);
 
 export function WorkflowPage(): React.ReactNode {
   const workflowPlaygroundRef = useRef<WorkflowPlaygroundRef>(null);
@@ -59,7 +52,11 @@ export function WorkflowPage(): React.ReactNode {
     <>
       <WorkflowPlayground
         ref={workflowPlaygroundRef}
-        sidebar={EmptySidebar}
+        // Embedded mode (fenix host iframe) restores the persistent left node sidebar (drag & click to
+        // add nodes); it renders nothing when not embedded, so the standalone Coze behavior is intact.
+        // The embedded gate lives inside NodeSidebar: this package does not declare @coze-arch/bot-http
+        // (phantom imports are not resolvable under pnpm), while the playground package does.
+        sidebar={NodeSidebar}
         workflowId={workflowId}
         spaceId={spaceId}
         commitId={setVersion ? undefined : version}

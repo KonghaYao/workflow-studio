@@ -17,6 +17,7 @@
 export { WorkflowGlobalState } from './entities';
 export { WorkflowGlobalStateEntity } from './typing';
 export { WorkflowPlayground } from './workflow-playground';
+export { NodeSidebar } from './components/node-sidebar';
 export {
   useGlobalState,
   useSpaceId,

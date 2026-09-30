@@ -1,0 +1,57 @@
+/*
+ * Copyright 2025 coze-dev Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// 宽度取 228px = 卡片原始宽度 204px + 两侧内边距 12px×2：嵌入态宿主容器常见宽度 ≥1280px，
+// 228px 给画布留下足够可用宽度（旧自研前端 wf-palette 的宽度建议区间是 200-260px）。
+// 面板不参与 flex 收缩：画布宽度由 `workflow-content` 的 flex 布局分配。
+.node-sidebar {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+
+  box-sizing: border-box;
+  width: 228px;
+  height: 100%;
+
+  background-color: var(--coz-bg-max);
+  border-right: 1px solid var(--coz-stroke-primary);
+
+  .node-sidebar-list {
+    overflow-y: auto;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+
+    padding: 12px;
+
+    // 复用弹层面板的条目组件（NodeCategoryPanel / CustomDragCard / NodeCard），只把「两列网格 +
+    // 固定 204px 卡片」收成单列整行：弹层面板是 440px 宽的两列（每列恰为 204px），侧栏是 228px
+    // 单列，卡片必须跟着列宽走。选择器用「包含匹配 + 侧栏作用域」：编译产物里 CSS Modules 的
+    // 类名保留 local 名（实测 `node-card` / `node-category-list`），包含匹配对 dev/prod 两种
+    // 命名都成立，且作用域限制在侧栏内，弹层面板与搜索列表不受影响。
+    :global {
+      [class*='node-category-list'] {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      [class*='node-card'] {
+        width: 100%;
+      }
+    }
+  }
+}
