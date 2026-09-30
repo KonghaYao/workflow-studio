@@ -18,6 +18,7 @@ import React from 'react';
 
 import { IconCozArrowLeft } from '@coze-arch/coze-design/icons';
 import { IconButton, CozAvatar } from '@coze-arch/coze-design';
+import { isEmbedded } from '@coze-arch/bot-http';
 
 import { WorkflowInfo } from '../workflow-header-info';
 import { useGlobalState } from '../../hooks';
@@ -38,20 +39,28 @@ const WorkFlowHeader: React.FC = () => {
   const globalState = useGlobalState();
   const { readonly, info, playgroundProps, workflowId } = globalState;
 
+  /**
+   * 嵌入模式（宿主 iframe）下导航与空间归属都由宿主承担：返回会跳到 Coze 站内的空间资源库 / bot 详情页，
+   * 复制会弹 Coze 的空间选择并在新窗口打开 Coze 链接，在嵌入时点了都是错的，故不渲染这两处入口。
+   */
+  const embedded = isEmbedded();
+
   return (
     <div className={styles.container}>
       <div
         className={styles.left}
         data-testid={getWorkflowHeaderTestId('info')}
       >
-        <IconButton
-          icon={<IconCozArrowLeft />}
-          color="secondary"
-          data-testid={getWorkflowHeaderTestId('back')}
-          onClick={() => {
-            playgroundProps.onBackClick?.(globalState);
-          }}
-        />
+        {embedded ? null : (
+          <IconButton
+            icon={<IconCozArrowLeft />}
+            color="secondary"
+            data-testid={getWorkflowHeaderTestId('back')}
+            onClick={() => {
+              playgroundProps.onBackClick?.(globalState);
+            }}
+          />
+        )}
 
         <CozAvatar src={info.url || ''} type="platform" alt="Avatar" />
 
@@ -76,7 +85,10 @@ const WorkFlowHeader: React.FC = () => {
 
         <PublishButton />
 
-        <DuplicateButton mode={readonly ? 'button' : 'icon'} />
+        {/* 复制到空间：跨空间归属与跳转由宿主负责，嵌入模式下不提供该入口（同上） */}
+        {embedded ? null : (
+          <DuplicateButton mode={readonly ? 'button' : 'icon'} />
+        )}
       </div>
     </div>
   );

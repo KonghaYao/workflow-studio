@@ -22,15 +22,17 @@ import { forwardRef, useEffect, type PropsWithChildren } from 'react';
 
 import { useShallow } from 'zustand/react/shallow';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { GlobalError } from '@coze-foundation/layout';
 import { WorkflowRenderProvider } from '@coze-workflow/render';
 import { WorkflowNodesContainerModule } from '@coze-workflow/nodes';
 import { WorkflowHistoryContainerModule } from '@coze-workflow/history';
 import { PUBLIC_SPACE_ID } from '@coze-workflow/base/constants';
 import { workflowQueryClient } from '@coze-workflow/base/api';
+import { GlobalError } from '@coze-foundation/layout';
 import { ErrorBoundary, logger } from '@coze-arch/logger';
 import { useSpaceStore } from '@coze-arch/bot-studio-store';
+import { isEmbedded } from '@coze-arch/bot-http';
 
+import { seedEmbeddedSpace, watchEmbeddedSpace } from './utils/embedded-space';
 import {
   type WorkflowPlaygroundProps,
   type WorkflowPlaygroundRef,
@@ -67,7 +69,6 @@ export const WorkflowPlayground = forwardRef<
   WorkflowPlaygroundRef,
   WorkflowPlaygroundProps
 >(({ spaceId = PUBLIC_SPACE_ID, parentContainer, ...props }, ref) => {
-  console.log('debugger workflow playground');
   const { spaceList, setSpace, fetchSpaces, checkSpaceID, inited } =
     useSpaceStore(
       useShallow(store => ({
@@ -80,8 +81,14 @@ export const WorkflowPlayground = forwardRef<
     );
   useEffect(() => {
     let isActive = true;
+    // 宿主 iframe 内没有 Coze 会话：跳过 GetSpaceListV2，按 URL 下发的 space id 直接注桩（见 utils/embedded-space）。
+    // 路由层用同一事实决定是否放行画布（apps/coze-studio 的 requireAuth 分支），独立部署下此分支不生效。
+    const embedded = isEmbedded();
+    if (embedded) {
+      seedEmbeddedSpace(spaceId);
+    }
     const initSpace = async () => {
-      if (!inited) {
+      if (!embedded && !inited) {
         await fetchSpaces(true);
       }
       if (!isActive) {
@@ -96,8 +103,14 @@ export const WorkflowPlayground = forwardRef<
 
     initSpace();
 
+    // 注桩会被壳层的「登出清理」reset 掉（嵌入模式恒无 Coze 会话），而本 effect 依赖不变不会重跑，故订阅自愈
+    const unwatchEmbeddedSpace = embedded
+      ? watchEmbeddedSpace(spaceId)
+      : undefined;
+
     return () => {
       isActive = false;
+      unwatchEmbeddedSpace?.();
     };
   }, [spaceId, fetchSpaces, setSpace, checkSpaceID]);
 

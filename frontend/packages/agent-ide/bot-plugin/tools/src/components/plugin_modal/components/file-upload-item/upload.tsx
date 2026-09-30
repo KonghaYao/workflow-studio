@@ -19,10 +19,10 @@ import { type FC, type ReactNode, useReducer } from 'react';
 import { merge } from 'lodash-es';
 import { produce } from 'immer';
 import { userStoreService } from '@coze-studio/user-store';
-import { I18n } from '@coze-arch/i18n';
-import { uploadFileV2 } from '@coze-arch/bot-utils';
 import { FileTypeEnum, getFileInfo } from '@coze-studio/file-kit/logic';
+import { I18n } from '@coze-arch/i18n';
 import { Upload, Toast, type UploadProps } from '@coze-arch/coze-design';
+import { uploadFileV2 } from '@coze-arch/bot-utils';
 
 interface PluginFileUploadProps {
   render: (props: { fileState: FileState; clearFile: () => void }) => ReactNode;
@@ -65,8 +65,9 @@ export const PluginFileUpload: FC<PluginFileUploadProps> = ({
   defaultUrl,
   defaultFileType,
 }) => {
-  // @ts-expect-error -- linter-disable-autofix
-  const userId = userStoreService.useUserInfo().user_id_str;
+  // 画布可脱离 Coze 会话运行（宿主 iframe），此时 userInfo 为 null；缺可选链会在渲染期抛错。
+  // 空串与 uploadFileV2 的签名（userId: string）及 upload-file.ts 的取值口径一致。
+  const userId = userStoreService.useUserInfo()?.user_id_str ?? '';
   const [fileState, setFileState] = useReducer(
     (states: FileState, payload: Action) =>
       produce(states, draft => {

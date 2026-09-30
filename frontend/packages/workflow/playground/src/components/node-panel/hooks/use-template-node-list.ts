@@ -26,6 +26,7 @@ import {
 import { StandardNodeType } from '@coze-workflow/base';
 
 import { WorkflowPlaygroundContext } from '@/workflow-playground-context';
+import { filterEmbeddedNodeTypes } from '@/utils/embedded-node-scope';
 import { type NodeCategory } from '@/typing';
 import { useGetWorkflowMode, useGlobalState } from '@/hooks';
 
@@ -59,13 +60,16 @@ export const useTemplateNodeList = (
   const { isSupportImageflowNodes } = useSupportImageflowNodesQuery();
 
   const nodeCategoryList = context.getTemplateCategoryList(
-    getEnabledNodeTypes({
-      loopSelected,
-      isSceneFlow,
-      isProject: Boolean(projectId),
-      isSupportImageflowNodes,
-      isBindDouyin: Boolean(isBindDouyin),
-    }),
+    // 嵌入模式下按兜底许可集收窄本地静态清单（服务端 cate_list 为空时的兜底分类会用这份清单）；非嵌入不受影响
+    filterEmbeddedNodeTypes(
+      getEnabledNodeTypes({
+        loopSelected,
+        isSceneFlow,
+        isProject: Boolean(projectId),
+        isSupportImageflowNodes,
+        isBindDouyin: Boolean(isBindDouyin),
+      }),
+    ),
     isSupportImageflowNodes,
   );
 
