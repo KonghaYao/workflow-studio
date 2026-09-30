@@ -24,6 +24,9 @@ export {
   emitAPIErrorEvent,
 } from './eventbus';
 
+/** 宿主 iframe 判定：画布侧所有「嵌入 / 独立运行」分支共用同一判据，避免各处各写一份。 */
+export { isEmbedded } from './host-bridge';
+
 export {
   axiosInstance,
   addGlobalRequestInterceptor,

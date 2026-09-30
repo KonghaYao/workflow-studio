@@ -14,10 +14,23 @@
  * limitations under the License.
  */
 
-import axios, { type AxiosResponse, isAxiosError } from 'axios';
+import axios, {
+  type AxiosError,
+  type AxiosResponse,
+  isAxiosError,
+  type InternalAxiosRequestConfig,
+} from 'axios';
 import { redirect } from '@coze-arch/web-context';
 import { logger } from '@coze-arch/logger';
 
+import {
+  getApiBaseUrl,
+  getTicket,
+  isEmbedded,
+  reportHostError,
+  requestTicketRefresh,
+  TICKET_HEADER_NAME,
+} from './host-bridge';
 import { emitAPIErrorEvent, APIErrorEvent } from './eventbus';
 import { ApiError, reportHttpError, ReportEventNames } from './api-error';
 
@@ -45,90 +58,182 @@ const customInterceptors = {
   response: new Set<ResponseInterceptorOnFulfilled>(),
 };
 
-axiosInstance.interceptors.response.use(
-  response => {
-    logger.info({
-      namespace: 'api',
-      scope: 'response',
-      message: '----',
-      meta: { response },
-    });
-    const { data = {} } = response;
+/** 兼容 axios 的两种 headers 形态（AxiosHeaders 实例 / 普通对象）写入请求头。 */
+const setConfigHeader = (
+  config: InternalAxiosRequestConfig,
+  key: string,
+  value: string,
+) => {
+  if (typeof config.headers.set === 'function') {
+    config.headers.set(key, value);
+  } else {
+    config.headers[key] = value;
+  }
+};
 
-    // Added interface return message field
-    const { code, msg, message } = data;
+/**
+ * 成功响应处理：日志、业务错误码（`code !== 0`）转 ApiError、自定义响应拦截器。
+ * 正常链路与 401 换票后的重放链路共用，保证两条链路的解包与报错语义一致。
+ */
+const processResponse: ResponseInterceptorOnFulfilled = response => {
+  logger.info({
+    namespace: 'api',
+    scope: 'response',
+    message: '----',
+    meta: { response },
+  });
+  const { data = {} } = response;
 
-    if (code !== 0) {
-      const apiError = new ApiError(String(code), message ?? msg, response);
+  // Added interface return message field
+  const { code, msg, message } = data;
 
-      switch (code) {
-        case ErrorCodes.NOT_LOGIN: {
-          // @ts-expect-error type safe
-          apiError.config.__disableErrorToast = true;
-          emitAPIErrorEvent(APIErrorEvent.UNAUTHORIZED, apiError);
-          break;
-        }
-        case ErrorCodes.COUNTRY_RESTRICTED: {
-          // @ts-expect-error type safe
-          apiError.config.__disableErrorToast = true;
-          emitAPIErrorEvent(APIErrorEvent.COUNTRY_RESTRICTED, apiError);
-          break;
-        }
-        case ErrorCodes.COZE_TOKEN_INSUFFICIENT: {
-          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-          // @ts-expect-error
-          apiError.config.__disableErrorToast = true;
-          emitAPIErrorEvent(APIErrorEvent.COZE_TOKEN_INSUFFICIENT, apiError);
-          break;
-        }
-        case ErrorCodes.COZE_TOKEN_INSUFFICIENT_WORKFLOW: {
-          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-          // @ts-expect-error
-          apiError.config.__disableErrorToast = true;
-          emitAPIErrorEvent(APIErrorEvent.COZE_TOKEN_INSUFFICIENT, apiError);
-          break;
-        }
-        default: {
-          break;
-        }
+  if (code !== 0) {
+    const apiError = new ApiError(String(code), message ?? msg, response);
+
+    switch (code) {
+      case ErrorCodes.NOT_LOGIN: {
+        // @ts-expect-error type safe
+        apiError.config.__disableErrorToast = true;
+        emitAPIErrorEvent(APIErrorEvent.UNAUTHORIZED, apiError);
+        break;
       }
-
-      reportHttpError(ReportEventNames.ApiError, apiError);
-      return Promise.reject(apiError);
-    }
-    let res = response;
-    for (const interceptor of customInterceptors.response) {
-      res = interceptor(res);
-    }
-
-    return res;
-  },
-  error => {
-    if (isAxiosError(error)) {
-      reportHttpError(ReportEventNames.NetworkError, error);
-      if (error.response?.status === HTTP_STATUS_COE_UNAUTHORIZED) {
-        // 401 Identity Expired & No Identity
-        if (typeof error.response.data === 'object') {
-          const unauthorizedData = error.response.data as UnauthorizedResponse;
-          const redirectUri = unauthorizedData?.data?.redirect_uri;
-          if (redirectUri) {
-            redirect(redirectUri);
-          }
-        }
+      case ErrorCodes.COUNTRY_RESTRICTED: {
+        // @ts-expect-error type safe
+        apiError.config.__disableErrorToast = true;
+        emitAPIErrorEvent(APIErrorEvent.COUNTRY_RESTRICTED, apiError);
+        break;
+      }
+      case ErrorCodes.COZE_TOKEN_INSUFFICIENT: {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error
+        apiError.config.__disableErrorToast = true;
+        emitAPIErrorEvent(APIErrorEvent.COZE_TOKEN_INSUFFICIENT, apiError);
+        break;
+      }
+      case ErrorCodes.COZE_TOKEN_INSUFFICIENT_WORKFLOW: {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error
+        apiError.config.__disableErrorToast = true;
+        emitAPIErrorEvent(APIErrorEvent.COZE_TOKEN_INSUFFICIENT, apiError);
+        break;
+      }
+      default: {
+        break;
       }
     }
 
+    reportHttpError(ReportEventNames.ApiError, apiError);
+    // 抛错而非返回 rejected Promise：本函数同时用作 axios onFulfilled 与重放链路的响应处理，
+    // 抛错在两条链路上的语义都是"当前响应失败"，且保持返回类型为 AxiosResponse
+    throw apiError;
+  }
+  let res = response;
+  for (const interceptor of customInterceptors.response) {
+    res = interceptor(res);
+  }
+
+  return res;
+};
+
+/**
+ * 非嵌入场景（Coze 独立运行）保持既有行为：带 redirect_uri 的 401 整页跳转登录页。
+ * 嵌入场景由宿主接管会话，见 handleUnauthorized。
+ */
+const redirectToLogin = (error: AxiosError) => {
+  if (typeof error.response?.data === 'object') {
+    const unauthorizedData = error.response.data as UnauthorizedResponse;
+    const redirectUri = unauthorizedData?.data?.redirect_uri;
+    if (redirectUri) {
+      redirect(redirectUri);
+    }
+  }
+};
+
+/** 上报 401 无法自愈，由宿主展示降级页；只带上状态码，不回传 URL / 参数等可能含敏感信息的字段。 */
+const reportUnauthorizedToHost = (error: unknown, retryable: boolean) => {
+  const status = isAxiosError(error) ? error.response?.status : undefined;
+  reportHostError({
+    code: status ? `http_${status}` : 'request_failed',
+    message: status
+      ? `canvas request failed with status ${status}`
+      : 'canvas request failed',
+    retryable,
+  });
+};
+
+/**
+ * 重放 401 前的请求（宿主换票成功后调用一次）。
+ *
+ * 走无拦截器的独立实例：`config` 已经过 axiosInstance 的请求拦截器（headers / CSRF / params 就绪），
+ * 而重放结果不能再进 axiosInstance 的响应拦截器链——链上还有下游拦截器（如 bot-api 的
+ * `response => response.data`）只接受 AxiosResponse，把已解包的结果再喂一次会二次解包。
+ */
+const replayAxiosInstance = axios.create();
+
+const replayWithFreshTicket = (
+  config: InternalAxiosRequestConfig,
+): Promise<AxiosResponse> => {
+  const replayConfig: InternalAxiosRequestConfig = { ...config };
+  const freshTicket = getTicket();
+  if (freshTicket) {
+    setConfigHeader(replayConfig, TICKET_HEADER_NAME, freshTicket);
+  }
+  const baseURL = getApiBaseUrl();
+  if (baseURL) {
+    replayConfig.baseURL = baseURL;
+  }
+  return replayAxiosInstance.request(replayConfig);
+};
+
+/**
+ * 401 处理：
+ * - 非嵌入：整页跳转（保持原行为）；
+ * - 嵌入：向宿主换票后重放一次原请求；换票或重放失败则上报宿主并抛出原始 401。
+ */
+const handleUnauthorized = (error: AxiosError): Promise<AxiosResponse> => {
+  if (!isEmbedded()) {
+    redirectToLogin(error);
     return Promise.reject(error);
-  },
-);
+  }
+  const { config } = error;
+  if (!config) {
+    reportUnauthorizedToHost(error, false);
+    return Promise.reject(error);
+  }
+  return requestTicketRefresh().then(refreshed => {
+    if (!refreshed) {
+      reportUnauthorizedToHost(error, false);
+      return Promise.reject(error);
+    }
+    return replayWithFreshTicket(config).then(
+      response => processResponse(response),
+      replayError => {
+        if (isAxiosError(replayError)) {
+          reportHttpError(ReportEventNames.NetworkError, replayError);
+        }
+        reportUnauthorizedToHost(replayError, true);
+        // 调用方拿到原始 401（票据已失效），由宿主展示降级与重新登录入口
+        return Promise.reject(error);
+      },
+    );
+  });
+};
+
+axiosInstance.interceptors.response.use(processResponse, error => {
+  if (isAxiosError(error)) {
+    reportHttpError(ReportEventNames.NetworkError, error);
+    if (error.response?.status === HTTP_STATUS_COE_UNAUTHORIZED) {
+      // 401 Identity Expired & No Identity
+      return handleUnauthorized(error);
+    }
+  }
+
+  return Promise.reject(error);
+});
 
 axiosInstance.interceptors.request.use(config => {
   const setHeader = (key: string, value: string) => {
-    if (typeof config.headers.set === 'function') {
-      config.headers.set(key, value);
-    } else {
-      config.headers[key] = value;
-    }
+    setConfigHeader(config, key, value);
   };
   const getHeader = (key: string) => {
     if (typeof config.headers.get === 'function') {
@@ -148,6 +253,18 @@ axiosInstance.interceptors.request.use(config => {
       config.data = {};
     }
   }
+
+  // 宿主嵌入场景（fenix iframe）：请求前缀切到宿主下发的 BFF 基址并携带短期票据；
+  // 无宿主上下文时 getApiBaseUrl / getTicket 都返回 undefined，行为与改造前完全一致。
+  const apiBaseUrl = getApiBaseUrl();
+  if (apiBaseUrl) {
+    config.baseURL = apiBaseUrl;
+  }
+  const ticket = getTicket();
+  if (ticket) {
+    setHeader(TICKET_HEADER_NAME, ticket);
+  }
+
   return config;
 });
 
