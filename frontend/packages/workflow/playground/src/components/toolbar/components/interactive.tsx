@@ -16,8 +16,6 @@
 
 import { useEffect, useState } from 'react';
 
-import { I18n } from '@coze-arch/i18n';
-import { Tooltip } from '@coze-arch/coze-design';
 import { usePlaygroundTools } from '@flowgram-adapter/free-layout-editor';
 import { type InteractiveType as IdeInteractiveType } from '@flowgram-adapter/free-layout-editor';
 import {
@@ -27,6 +25,9 @@ import {
   getPreferInteractiveType,
   setPreferInteractiveType,
 } from '@coze-common/mouse-pad-selector';
+import { I18n } from '@coze-arch/i18n';
+import { Tooltip } from '@coze-arch/coze-design';
+import { isEmbedded } from '@coze-arch/bot-http';
 
 export const Interactive = () => {
   const tools = usePlaygroundTools();
@@ -52,47 +53,54 @@ export const Interactive = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- init
   }, []);
 
-  return (
-    <GuidingPopover>
-      <Tooltip
-        content={mousePadTooltip}
-        style={{ display: showInteractivePanel ? 'none' : 'block' }}
+  const interactiveSelector = (
+    <Tooltip
+      content={mousePadTooltip}
+      style={{ display: showInteractivePanel ? 'none' : 'block' }}
+    >
+      <div
+        className="workflow-toolbar-interactive"
+        data-testid="workflow.detail.toolbar.interactive"
       >
-        <div
-          className="workflow-toolbar-interactive"
-          data-testid="workflow.detail.toolbar.interactive"
-        >
-          <MousePadSelector
-            value={interactiveType}
-            onChange={value => {
-              setInteractiveType(value);
-              setPreferInteractiveType(value);
-              tools.setInteractiveType(value as unknown as IdeInteractiveType);
-            }}
-            onPopupVisibleChange={setShowInteractivePanel}
-            containerStyle={{
-              border: 'none',
-              height: '24px',
-              width: '38px',
-              justifyContent: 'center',
-              alignItems: 'center',
-              gap: '2px',
-              padding: '4px',
-              paddingTop: '1px',
-              borderRadius: 'var(--small, 6px)',
-            }}
-            iconStyle={{
-              margin: '0',
-              width: '16px',
-              height: '16px',
-            }}
-            arrowStyle={{
-              width: '12px',
-              height: '12px',
-            }}
-          />
-        </div>
-      </Tooltip>
-    </GuidingPopover>
+        <MousePadSelector
+          value={interactiveType}
+          onChange={value => {
+            setInteractiveType(value);
+            setPreferInteractiveType(value);
+            tools.setInteractiveType(value as unknown as IdeInteractiveType);
+          }}
+          onPopupVisibleChange={setShowInteractivePanel}
+          containerStyle={{
+            border: 'none',
+            height: '24px',
+            width: '38px',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: '2px',
+            padding: '4px',
+            paddingTop: '1px',
+            borderRadius: 'var(--small, 6px)',
+          }}
+          iconStyle={{
+            margin: '0',
+            width: '16px',
+            height: '16px',
+          }}
+          arrowStyle={{
+            width: '12px',
+            height: '12px',
+          }}
+        />
+      </div>
+    </Tooltip>
   );
+
+  // 嵌入态（宿主 iframe）不挂一次性交互引导浮层 `GuidingPopover`：它弹在画布中央，会盖住节点并吃掉
+  // 真实点击（点击被浮层内部接住，「点击外部关闭」不触发，用户只能点浮层里的「Got it」才能继续）。
+  // 该引导面向上游独立站的首次访问者，嵌入态的引导由宿主页面承担；非嵌入态行为不变。
+  if (isEmbedded()) {
+    return interactiveSelector;
+  }
+
+  return <GuidingPopover>{interactiveSelector}</GuidingPopover>;
 };
