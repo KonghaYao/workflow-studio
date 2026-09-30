@@ -17,6 +17,7 @@
 import { useEffect } from 'react';
 
 import { logger, type SlardarInstance } from '@coze-arch/logger';
+import { isEmbedded } from '@coze-arch/bot-http';
 
 import { ReportEventNames } from './const';
 import {
@@ -33,8 +34,14 @@ const loggerWithScope = logger.createLoggerWith({
 });
 
 export const useErrorCatch = (slardarInstance: SlardarInstance) => {
+  /** 嵌入模式（宿主 iframe）下画布没有 Coze 会话，错误监控与身份都由宿主承担，这里既不挂监听也不上报。 */
+  const embedded = isEmbedded();
+
   // 1. promise rejection
   useEffect(() => {
+    if (embedded) {
+      return;
+    }
     const handlePromiseRejection = (event: PromiseRejectionEvent) => {
       event.promise.catch(error => {
         loggerWithScope.info({
@@ -59,10 +66,13 @@ export const useErrorCatch = (slardarInstance: SlardarInstance) => {
     return () => {
       window.removeEventListener('unhandledrejection', handlePromiseRejection);
     };
-  }, []);
+  }, [embedded]);
 
   // 3. Interception of slardar reports
   useEffect(() => {
+    if (embedded) {
+      return;
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const beforeSlardarSend = (e: any) => {
       const error = e?.payload?.error;
@@ -80,5 +90,5 @@ export const useErrorCatch = (slardarInstance: SlardarInstance) => {
     return () => {
       slardarInstance?.off('beforeSend', beforeSlardarSend);
     };
-  }, []);
+  }, [embedded]);
 };

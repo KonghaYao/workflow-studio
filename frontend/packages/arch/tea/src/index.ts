@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import Tea from '@coze-studio/tea-adapter';
+import Tea, { type Tea as TeaInstance } from '@coze-studio/tea-adapter';
 
 export {
   EVENT_NAMES,
@@ -47,4 +47,34 @@ export type {
   DocClickCommonParams,
 } from '@coze-studio/tea-interface/events';
 
-export default Tea;
+const noop = () => {
+  // do nothing
+};
+
+/** 惰性 Tea：任何属性取值与调用都落到空实现，init / sendEvent 都不会发出请求。 */
+const inertTea = new Proxy(
+  function () {
+    // do nothing
+  },
+  {
+    get: () => noop,
+    apply: () => undefined,
+  },
+);
+
+/**
+ * 嵌入模式（宿主 iframe）下画布没有 Coze 会话，埋点由宿主承担，这里下发惰性实例——
+ * 无论 tea-adapter 是空实现还是真实 SDK，画布都既不初始化也不上报。
+ * 判据与 `@coze-arch/bot-http/src/host-bridge.ts` 的 isEmbedded() 同义；本包未声明 bot-http 依赖
+ * （pnpm 隔离链接下解析不到），故就地实现，两处语义必须保持一致。
+ */
+const isEmbedded = (): boolean => {
+  try {
+    return typeof window !== 'undefined' && window.self !== window.top;
+  } catch {
+    // 跨域 / sandbox 下读 window.top 会抛错，按"非嵌入"保守处理（与 host-bridge 一致）
+    return false;
+  }
+};
+
+export default (isEmbedded() ? inertTea : Tea) as TeaInstance;
