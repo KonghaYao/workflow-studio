@@ -1,8 +1,10 @@
 name: Docker Publish
 
-# 构建并推送两个自建镜像到 GHCR（其余 mysql/redis/es/minio/etcd/milvus/nsq 均为第三方镜像，无需构建）：
-#   ghcr.io/<owner>/<repo>-server  ← backend/Dockerfile   （Go 服务，对应 coze-server）
-#   ghcr.io/<owner>/<repo>-web     ← frontend/Dockerfile  （nginx 前端，对应 coze-web）
+# 构建并推送三个自建镜像到 GHCR（其余 mysql/redis/es/minio/etcd/milvus/nsq 均为第三方镜像，无需构建）：
+#   ghcr.io/<owner>/<repo>-server     ← backend/Dockerfile   （Go 服务，对应 coze-server）
+#   ghcr.io/<owner>/<repo>-web        ← frontend/Dockerfile  （nginx 前端，根路径部署，对应 coze-web）
+#   ghcr.io/<owner>/<repo>-web-canvas ← frontend/Dockerfile  （同上，但 WORKFLOW_CANVAS_BASE=/workflow-canvas/）
+# -web 与 -web-canvas 同 commit 同 tag：下游可用同一个 tag 引用 server 与画布子路径变体。
 on:
   push:
     branches: ['main']
@@ -35,6 +37,11 @@ jobs:
             dockerfile: backend/Dockerfile
           - image_suffix: web
             dockerfile: frontend/Dockerfile
+            build_args: WORKFLOW_CANVAS_BASE=/
+          # 画布子路径变体：与 -web 同源码同 tag，仅构建参数不同（资源前缀 + 路由 basename 切到 /workflow-canvas/）
+          - image_suffix: web-canvas
+            dockerfile: frontend/Dockerfile
+            build_args: WORKFLOW_CANVAS_BASE=/workflow-canvas/
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,6 +85,7 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          build-args: ${{ matrix.build_args }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image_suffix }}

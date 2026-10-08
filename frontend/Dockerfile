@@ -33,8 +33,10 @@ RUN find . -name "*.sh" -type f -exec dos2unix {} \;
 # Install all dependencies
 RUN chmod +x scripts/hooks/post-rush-install.sh && rm -rf /app/common/temp && rush install
 
-# Use rush build to build the specific project
-RUN rush build --to @coze-studio/app
+# 画布子路径变体：WORKFLOW_CANVAS_BASE 同时决定资源前缀与路由 basename，缺省 '/' 与改造前一致。
+# ARG 必须声明在 builder stage 内（多 stage 不继承），并置于 RUN 之前，使该层缓存随变体失效。
+ARG WORKFLOW_CANVAS_BASE=/
+RUN WORKFLOW_CANVAS_BASE=$WORKFLOW_CANVAS_BASE rush build --to @coze-studio/app
 
 # Production image stage
 FROM nginx:1.25-alpine
