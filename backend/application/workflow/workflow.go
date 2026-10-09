@@ -31,6 +31,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/coze-dev/coze-studio/backend/api/model/app/bot_common"
+	"github.com/coze-dev/coze-studio/backend/api/model/base"
 	"github.com/coze-dev/coze-studio/backend/api/model/data/database/table"
 	"github.com/coze-dev/coze-studio/backend/api/model/playground"
 	pluginAPI "github.com/coze-dev/coze-studio/backend/api/model/plugin_develop"
@@ -837,6 +838,236 @@ func (w *ApplicationService) GetProcess(ctx context.Context, req *workflow.GetWo
 	}
 
 	return resp, nil
+}
+
+const (
+	defaultListRootSpansLimit = 20
+	maxListRootSpansLimit     = 50
+	// listRootSpansDefaultRange is used as the time range when start_at is not specified.
+	listRootSpansDefaultRange = 7 * 24 * time.Hour
+)
+
+// ListRootSpans lists the root execution history of a workflow as trace spans.
+// The returned spans are ordered by created time, newest first by default.
+func (w *ApplicationService) ListRootSpans(ctx context.Context, req *workflow.ListRootSpansRequest) (
+	_ *workflow.ListRootSpansResponse, err error,
+) {
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			err = safego.NewPanicErr(panicErr, debug.Stack())
+		}
+
+		if err != nil {
+			err = vo.WrapIfNeeded(errno.ErrWorkflowOperationFail, err, errorx.KV("cause", vo.UnwrapRootErr(err).Error()))
+		}
+	}()
+
+	workflowID, parseErr := strconv.ParseInt(strings.TrimSpace(req.GetWorkflowID()), 10, 64)
+	if parseErr != nil || workflowID <= 0 {
+		return nil, vo.NewError(errno.ErrInvalidParameter, errorx.KV("msg", "workflow_id is invalid"))
+	}
+
+	endAt := req.GetEndAt()
+	if endAt <= 0 {
+		endAt = time.Now().UnixMilli()
+	}
+
+	startAt := req.GetStartAt()
+	if startAt <= 0 {
+		startAt = endAt - listRootSpansDefaultRange.Milliseconds()
+	}
+
+	if startAt > endAt {
+		return nil, vo.NewError(errno.ErrInvalidParameter, errorx.KV("msg", "start_at is later than end_at"))
+	}
+
+	statuses, ok := rootSpanStatuses(req.GetStatus())
+	if !ok {
+		return nil, vo.NewError(errno.ErrInvalidParameter, errorx.KV("msg", "status is invalid"))
+	}
+
+	var mode *int32
+	if executeMode := req.GetExecuteMode(); executeMode != 0 {
+		if !validExecuteMode(executeMode) {
+			return nil, vo.NewError(errno.ErrInvalidParameter, errorx.KV("msg", "execute_mode is invalid"))
+		}
+		mode = ptr.Of(executeMode)
+	}
+
+	limit := req.GetLimit()
+	if limit <= 0 {
+		limit = defaultListRootSpansLimit
+	}
+	if limit > maxListRootSpansLimit {
+		limit = maxListRootSpansLimit
+	}
+
+	offset := req.GetOffset()
+	if offset < 0 {
+		offset = 0
+	}
+
+	descByStartTime := true
+	if req.IsSetDescByStartTime() {
+		descByStartTime = req.GetDescByStartTime()
+	}
+
+	// the workflow meta is fetched both for the space permission check and for the span name
+	meta, err := GetWorkflowDomainSVC().Get(ctx, &vo.GetPolicy{
+		ID:       workflowID,
+		MetaOnly: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err = checkUserSpace(ctx, ctxutil.MustGetUIDFromCtx(ctx), meta.SpaceID); err != nil {
+		return nil, err
+	}
+
+	executions, err := GetWorkflowDomainSVC().ListRootExecutions(ctx, &vo.ListExecutionFilter{
+		WorkflowID:      workflowID,
+		StartAt:         startAt,
+		EndAt:           endAt,
+		Statuses:        statuses,
+		Mode:            mode,
+		Input:           req.GetInput(),
+		Limit:           int32(limit),
+		Offset:          offset,
+		DescByStartTime: descByStartTime,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	name := meta.Name
+	if name == "" {
+		name = strconv.FormatInt(workflowID, 10)
+	}
+
+	spans := make([]*workflow.Span, 0, len(executions))
+	for _, execution := range executions {
+		spans = append(spans, toRootSpan(execution, name))
+	}
+
+	return &workflow.ListRootSpansResponse{
+		Spans:    spans,
+		BaseResp: base.NewBaseResp(),
+	}, nil
+}
+
+// rootSpanStatuses maps the SpanStatus filter to raw workflow_execution.status values.
+// SpanStatus Unknown (0) means no filter, and ok is false for the unsupported values.
+func rootSpanStatuses(status workflow.SpanStatus) (statuses []int32, ok bool) {
+	switch status {
+	case workflow.SpanStatus_Unknown:
+		return nil, true
+	case workflow.SpanStatus_Success:
+		return []int32{int32(entity.WorkflowSuccess)}, true
+	case workflow.SpanStatus_Fail:
+		return []int32{int32(entity.WorkflowFailed)}, true
+	case spanStatusRunning:
+		return []int32{int32(entity.WorkflowRunning)}, true
+	case spanStatusCancelled:
+		return []int32{int32(entity.WorkflowCancel)}, true
+	case spanStatusInterrupted:
+		return []int32{int32(entity.WorkflowInterrupted)}, true
+	default:
+		return nil, false
+	}
+}
+
+// SpanStatus of the trace API only defines Unknown/Success/Fail, the workflow run
+// history extends it with the remaining workflow execution statuses.
+const (
+	spanStatusRunning     workflow.SpanStatus = 3
+	spanStatusCancelled   workflow.SpanStatus = 4
+	spanStatusInterrupted workflow.SpanStatus = 5
+)
+
+func validExecuteMode(mode int32) bool {
+	return mode >= int32(executeModeDebug) && mode <= int32(executeModeNodeDebug)
+}
+
+// execute mode values as recorded in workflow_execution.mode
+const (
+	executeModeDebug     int32 = 1
+	executeModeRelease   int32 = 2
+	executeModeNodeDebug int32 = 3
+)
+
+func toRootSpan(execution *entity.WorkflowExecution, name string) *workflow.Span {
+	spanID := strconv.FormatInt(execution.ID, 10)
+
+	// the log id falls back to the span id, so that the span is still selectable in the console
+	logID := execution.LogID
+	if logID == "" {
+		logID = spanID
+	}
+
+	// the console renders status code 0 as success
+	statusCode := int32(1)
+	if execution.Status == entity.WorkflowSuccess {
+		statusCode = 0
+	}
+
+	duration := execution.Duration.Milliseconds()
+	startTime := execution.CreatedAt.UnixMilli()
+
+	return &workflow.Span{
+		TraceID:    logID,
+		LogID:      logID,
+		SpanID:     spanID,
+		Type:       "Workflow",
+		Name:       name,
+		ParentID:   "0",
+		Duration:   duration,
+		StartTime:  startTime,
+		StatusCode: statusCode,
+		Tags: []*workflow.TraceTag{
+			stringTag("is_trigger", "true"),
+			stringTag("workflow_id", strconv.FormatInt(execution.WorkflowID, 10)),
+			stringTag("execute_id", spanID),
+			stringTag("version", execution.Version),
+			longTag("mode", int64(executeModeOf(execution.Mode))),
+			longTag("status", int64(execution.Status)),
+			longTag("node_count", int64(execution.NodeCount)),
+			stringTag("error_code", ptr.FromOrDefault(execution.ErrorCode, "")),
+			stringTag("log_id", execution.LogID),
+			longTag("duration", duration),
+			longTag("created_at", startTime),
+		},
+	}
+}
+
+// executeModeOf converts the execution mode to the value recorded in workflow_execution.mode.
+func executeModeOf(mode workflowModel.ExecuteMode) int32 {
+	switch mode {
+	case workflowModel.ExecuteModeDebug:
+		return executeModeDebug
+	case workflowModel.ExecuteModeRelease:
+		return executeModeRelease
+	case workflowModel.ExecuteModeNodeDebug:
+		return executeModeNodeDebug
+	default:
+		return 0
+	}
+}
+
+func stringTag(key, value string) *workflow.TraceTag {
+	return &workflow.TraceTag{
+		Key:     key,
+		TagType: workflow.TagType_STRING,
+		Value:   &workflow.Value{VStr: ptr.Of(value)},
+	}
+}
+
+func longTag(key string, value int64) *workflow.TraceTag {
+	return &workflow.TraceTag{
+		Key:     key,
+		TagType: workflow.TagType_LONG,
+		Value:   &workflow.Value{VLong: ptr.Of(value)},
+	}
 }
 
 func (w *ApplicationService) GetNodeExecuteHistory(ctx context.Context, req *workflow.GetNodeExecuteHistoryRequest) (

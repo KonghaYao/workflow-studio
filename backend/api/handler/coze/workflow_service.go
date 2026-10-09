@@ -34,9 +34,11 @@ import (
 	"github.com/coze-dev/coze-studio/backend/api/model/workflow"
 	appworkflow "github.com/coze-dev/coze-studio/backend/application/workflow"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity/vo"
+	"github.com/coze-dev/coze-studio/backend/pkg/errorx"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/ptr"
 	"github.com/coze-dev/coze-studio/backend/pkg/logs"
 	"github.com/coze-dev/coze-studio/backend/pkg/sonic"
+	"github.com/coze-dev/coze-studio/backend/types/errno"
 )
 
 // CreateWorkflow .
@@ -636,9 +638,24 @@ func ListRootSpans(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(workflow.ListRootSpansResponse)
+	resp, err := appworkflow.SVC.ListRootSpans(ctx, &req)
+	if err != nil {
+		var statusErr errorx.StatusError
+		if errors.As(err, &statusErr) && statusErr.Code() == int32(errno.ErrInvalidParameter) {
+			invalidParamRequestResponse(c, statusErr.Msg())
+			return
+		}
 
-	c.JSON(consts.StatusOK, resp)
+		internalServerErrorResponse(ctx, c, err)
+		return
+	}
+
+	// the console reads the spans as well as the status code from the top level of the body
+	c.JSON(consts.StatusOK, map[string]any{
+		"code":  0,
+		"msg":   "",
+		"spans": resp.GetSpans(),
+	})
 }
 
 // GetTraceSDK .

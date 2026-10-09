@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	"gorm.io/gen/field"
 	"gorm.io/gorm"
 
 	workflowModel "github.com/coze-dev/coze-studio/backend/crossdomain/workflow/model"
@@ -31,6 +33,7 @@ import (
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/repo/dal/model"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/internal/repo/dal/query"
 	"github.com/coze-dev/coze-studio/backend/infra/cache"
+	"github.com/coze-dev/coze-studio/backend/pkg/errorx"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/ptr"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/slices"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/ternary"
@@ -559,4 +562,100 @@ func (e *executeHistoryStoreImpl) GetNodeDebugLatestExeID(ctx context.Context, w
 		return 0, err
 	}
 	return exeID, nil
+}
+
+// ListRootExecutions lists the root executions of a workflow, newest first by default.
+// Sub workflow executions (which carry the parent node key) are excluded, and the large
+// columns input/output/fail_reason are not selected.
+func (e *executeHistoryStoreImpl) ListRootExecutions(ctx context.Context, filter *vo.ListExecutionFilter) (
+	[]*entity.WorkflowExecution, error,
+) {
+	if filter == nil {
+		return nil, vo.NewError(errno.ErrInvalidParameter, errorx.KV("msg", "list execution filter is required"))
+	}
+
+	q := e.query.WorkflowExecution
+	do := q.WithContext(ctx).
+		Select(
+			q.ID,
+			q.WorkflowID,
+			q.Version,
+			q.SpaceID,
+			q.Mode,
+			q.CreatedAt,
+			q.LogID,
+			q.Status,
+			q.Duration,
+			q.ErrorCode,
+			q.NodeCount,
+			q.ParentNodeID,
+		).
+		Where(q.WorkflowID.Eq(filter.WorkflowID)).
+		Where(q.CreatedAt.Gte(filter.StartAt), q.CreatedAt.Lte(filter.EndAt)).
+		// only the root execution: a sub workflow execution is recorded with the parent node key
+		Where(field.Or(q.ParentNodeID.Eq(""), q.ParentNodeID.IsNull()))
+
+	if len(filter.Statuses) > 0 {
+		do = do.Where(q.Status.In(filter.Statuses...))
+	}
+	if filter.Mode != nil {
+		do = do.Where(q.Mode.Eq(*filter.Mode))
+	}
+	if filter.Input != "" {
+		do = do.Where(q.Input.Like("%" + escapeLikePattern(filter.Input) + "%"))
+	}
+
+	if filter.DescByStartTime {
+		do = do.Order(q.CreatedAt.Desc(), q.ID.Desc())
+	} else {
+		do = do.Order(q.CreatedAt.Asc(), q.ID.Asc())
+	}
+
+	executions, err := do.Limit(int(filter.Limit)).Offset(int(filter.Offset)).Find()
+	if err != nil {
+		return nil, vo.WrapError(errno.ErrDatabaseError, fmt.Errorf("failed to list workflow executions: %v", err))
+	}
+
+	rootExecutions := make([]*entity.WorkflowExecution, 0, len(executions))
+	for _, execution := range executions {
+		rootExecutions = append(rootExecutions, listItemToEntity(execution))
+	}
+
+	return rootExecutions, nil
+}
+
+func listItemToEntity(execution *model.WorkflowExecution) *entity.WorkflowExecution {
+	var mode workflowModel.ExecuteMode
+	if execution.Mode == 1 {
+		mode = workflowModel.ExecuteModeDebug
+	} else if execution.Mode == 2 {
+		mode = workflowModel.ExecuteModeRelease
+	} else {
+		mode = workflowModel.ExecuteModeNodeDebug
+	}
+
+	return &entity.WorkflowExecution{
+		ID:         execution.ID,
+		WorkflowID: execution.WorkflowID,
+		Version:    execution.Version,
+		SpaceID:    execution.SpaceID,
+		ExecuteConfig: workflowModel.ExecuteConfig{
+			Mode: mode,
+		},
+		CreatedAt:       time.UnixMilli(execution.CreatedAt),
+		LogID:           execution.LogID,
+		NodeCount:       execution.NodeCount,
+		Status:          entity.WorkflowExecuteStatus(execution.Status),
+		Duration:        time.Duration(execution.Duration) * time.Millisecond,
+		ErrorCode:       ptr.Of(execution.ErrorCode),
+		ParentNodeID:    ptr.Of(execution.ParentNodeID),
+		RootExecutionID: execution.RootExecutionID,
+	}
+}
+
+// escapeLikePattern escapes the LIKE wildcards so that the input is matched as a literal substring.
+// MySQL uses the backslash as the default escape character.
+func escapeLikePattern(s string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(s)
 }

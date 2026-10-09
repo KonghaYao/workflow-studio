@@ -40,6 +40,7 @@ type Executable interface {
 		*schema.StreamReader[*entity.Message], error)
 
 	GetExecution(ctx context.Context, wfExe *entity.WorkflowExecution, includeNodes bool) (*entity.WorkflowExecution, error)
+	ListRootExecutions(ctx context.Context, filter *vo.ListExecutionFilter) ([]*entity.WorkflowExecution, error)
 	GetNodeExecution(ctx context.Context, exeID int64, nodeID string) (*entity.NodeExecution, *entity.NodeExecution, error)
 	GetLatestTestRunInput(ctx context.Context, wfID int64, userID int64) (*entity.NodeExecution, bool, error)
 	GetLatestNodeDebugInput(ctx context.Context, wfID int64, nodeID string, userID int64) (
@@ -103,6 +104,7 @@ type ExecuteHistoryStore interface {
 	UpdateWorkflowExecution(ctx context.Context, execution *entity.WorkflowExecution, allowedStatus []entity.WorkflowExecuteStatus) (int64, entity.WorkflowExecuteStatus, error)
 	TryLockWorkflowExecution(ctx context.Context, wfExeID, resumingEventID int64) (bool, entity.WorkflowExecuteStatus, error)
 	GetWorkflowExecution(ctx context.Context, id int64) (*entity.WorkflowExecution, bool, error)
+	ListRootExecutions(ctx context.Context, filter *vo.ListExecutionFilter) ([]*entity.WorkflowExecution, error)
 	CreateNodeExecution(ctx context.Context, execution *entity.NodeExecution) error
 	UpdateNodeExecution(ctx context.Context, execution *entity.NodeExecution) error
 	UpdateNodeExecutionStreaming(ctx context.Context, execution *entity.NodeExecution) error

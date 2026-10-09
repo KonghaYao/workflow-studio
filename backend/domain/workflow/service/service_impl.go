@@ -55,6 +55,7 @@ type impl struct {
 	*asToolImpl
 	*executableImpl
 	*conversationImpl
+	*historyQueryImpl
 }
 
 func NewWorkflowService(repo workflow.Repository) workflow.Service {
@@ -67,6 +68,7 @@ func NewWorkflowService(repo workflow.Repository) workflow.Service {
 			repo: repo,
 		},
 		conversationImpl: &conversationImpl{repo: repo},
+		historyQueryImpl: &historyQueryImpl{repo: repo},
 	}
 }
 

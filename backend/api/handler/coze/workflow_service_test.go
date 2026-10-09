@@ -47,6 +47,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 
+	middleware "github.com/coze-dev/coze-studio/backend/api/middleware"
 	"github.com/coze-dev/coze-studio/backend/api/model/playground"
 	pluginAPI "github.com/coze-dev/coze-studio/backend/api/model/plugin_develop"
 	"github.com/coze-dev/coze-studio/backend/api/model/workflow"
@@ -174,6 +175,7 @@ var req2URL = map[reflect.Type]string{
 	reflect.TypeOf(&workflow.GetChatFlowRoleRequest{}):              "/api/workflow_api/chat_flow_role/get",
 	reflect.TypeOf(&workflow.CreateChatFlowRoleRequest{}):           "/api/workflow_api/chat_flow_role/create",
 	reflect.TypeOf(&workflow.DeleteChatFlowRoleRequest{}):           "/api/workflow_api/chat_flow_role/delete",
+	reflect.TypeOf(&workflow.ListRootSpansRequest{}):                "/api/workflow_api/list_spans",
 }
 
 func newWfTestRunner(t *testing.T) *wfTestRunner {
@@ -226,6 +228,7 @@ func newWfTestRunner(t *testing.T) *wfTestRunner {
 	h.POST("/api/workflow_api/chat_flow_role/delete", DeleteChatFlowRole)
 	h.POST("/api/workflow_api/chat_flow_role/create", CreateChatFlowRole)
 	h.GET("/api/workflow_api/chat_flow_role/get", GetChatFlowRole)
+	h.POST("/api/workflow_api/list_spans", ListRootSpans)
 	h.POST("/v1/workflows/chat", OpenAPIChatFlowRun)
 
 	ctrl := gomock.NewController(t, gomock.WithOverridableExpectations())
@@ -3315,5 +3318,250 @@ func TestConversationHistoryNodes(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, true, outputMap["isSuccess"])
 		assert.Equal(t, []any{}, outputMap["history_list"])
+	})
+}
+
+// listRootSpansBody is the flat response body of /api/workflow_api/list_spans.
+type listRootSpansBody struct {
+	Code  int32            `json:"code"`
+	Msg   string           `json:"msg"`
+	Spans []*workflow.Span `json:"spans"`
+}
+
+func (r *wfTestRunner) listRootSpans(req *workflow.ListRootSpansRequest) (int, string) {
+	m, err := sonic.Marshal(req)
+	assert.NoError(r.t, err)
+
+	w := ut.PerformRequest(r.h.Engine, "POST", "/api/workflow_api/list_spans",
+		&ut.Body{Body: bytes.NewBuffer(m), Len: len(m)},
+		ut.Header{Key: "Content-Type", Value: "application/json"})
+	res := w.Result()
+	return res.StatusCode(), string(res.Body())
+}
+
+func listRootSpansTags(span *workflow.Span) map[string]*workflow.Value {
+	tags := make(map[string]*workflow.Value, len(span.Tags))
+	for _, tag := range span.Tags {
+		tags[tag.Key] = tag.Value
+	}
+	return tags
+}
+
+// TestListRootSpansAuth verifies that the endpoint is protected by the session middleware.
+func TestListRootSpansAuth(t *testing.T) {
+	h := server.Default()
+	h.Use(middleware.RequestInspectorMW())
+	h.Use(middleware.SessionAuthMW())
+	h.POST("/api/workflow_api/list_spans", ListRootSpans)
+	defer func() {
+		_ = h.Close()
+	}()
+
+	m := []byte(`{"workflow_id":"1","start_at":1,"end_at":2}`)
+	w := ut.PerformRequest(h.Engine, "POST", "/api/workflow_api/list_spans",
+		&ut.Body{Body: bytes.NewBuffer(m), Len: len(m)},
+		ut.Header{Key: "Content-Type", Value: "application/json"})
+	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode())
+}
+
+func TestListRootSpans(t *testing.T) {
+	r := newWfTestRunner(t)
+	defer r.closeFn()
+
+	ctx := context.Background()
+	repo := workflow2.GetRepository()
+	domainSVC := appworkflow.GetWorkflowDomainSVC()
+
+	idStr := r.load("list_spans.json", withWorkflowData([]byte(`{"nodes":[],"edges":[]}`)),
+		withName("list_spans_wf"))
+	wfID, err := strconv.ParseInt(idStr, 10, 64)
+	assert.NoError(t, err)
+
+	// a workflow of the tested user without any execution
+	emptyIDStr := r.load("list_spans.json", withWorkflowData([]byte(`{"nodes":[],"edges":[]}`)),
+		withName("list_spans_empty_wf"))
+
+	// a workflow of another space, which the tested user has no access to
+	otherSpaceID, err := domainSVC.Create(ctx, &vo.MetaCreate{
+		Name:             "list_spans_other_space",
+		SpaceID:          124,
+		CreatorID:        123,
+		ContentType:      workflow.WorkFlowType_User,
+		Mode:             workflow.WorkflowMode_Workflow,
+		InitCanvasSchema: "{}",
+	})
+	assert.NoError(t, err)
+
+	// a succeeded root execution
+	successID := time.Now().UnixNano()
+	assert.NoError(t, repo.CreateWorkflowExecution(ctx, &entity.WorkflowExecution{
+		ID:         successID,
+		WorkflowID: wfID,
+		SpaceID:    123,
+		Version:    "v1.0.0",
+		LogID:      "log-success",
+		NodeCount:  4,
+		Input:      ptr.Of(`{"q":"hello"}`),
+		ExecuteConfig: workflowModel.ExecuteConfig{
+			Mode:     workflowModel.ExecuteModeDebug,
+			Operator: 123,
+		},
+	}))
+	_, _, err = repo.UpdateWorkflowExecution(ctx, &entity.WorkflowExecution{
+		ID:       successID,
+		Status:   entity.WorkflowSuccess,
+		Duration: 1500 * time.Millisecond,
+		Output:   ptr.Of("{}"),
+	}, []entity.WorkflowExecuteStatus{entity.WorkflowRunning})
+	assert.NoError(t, err)
+
+	// a newer, still running root execution without log id
+	runningID := time.Now().UnixNano()
+	assert.NoError(t, repo.CreateWorkflowExecution(ctx, &entity.WorkflowExecution{
+		ID:         runningID,
+		WorkflowID: wfID,
+		SpaceID:    123,
+		NodeCount:  2,
+		Input:      ptr.Of(`{"q":"world"}`),
+		ExecuteConfig: workflowModel.ExecuteConfig{
+			Mode:     workflowModel.ExecuteModeRelease,
+			Operator: 123,
+		},
+	}))
+
+	// a sub workflow execution, which must not be listed
+	parentNodeID := "node-1"
+	subExeID := time.Now().UnixNano()
+	assert.NoError(t, repo.CreateWorkflowExecution(ctx, &entity.WorkflowExecution{
+		ID:                  subExeID,
+		WorkflowID:          wfID,
+		SpaceID:             123,
+		RootExecutionID:     successID,
+		ParentNodeID:        &parentNodeID,
+		ParentNodeExecuteID: ptr.Of(successID),
+		ExecuteConfig: workflowModel.ExecuteConfig{
+			Mode:     workflowModel.ExecuteModeDebug,
+			Operator: 123,
+		},
+	}))
+
+	timeRange := func(req *workflow.ListRootSpansRequest) *workflow.ListRootSpansRequest {
+		req.StartAt = time.Now().Add(-time.Hour).UnixMilli()
+		req.EndAt = time.Now().Add(time.Minute).UnixMilli()
+		return req
+	}
+
+	t.Run("invalid workflow id", func(t *testing.T) {
+		status, _ := r.listRootSpans(&workflow.ListRootSpansRequest{
+			WorkflowID: "not-a-number",
+			StartAt:    1,
+			EndAt:      2,
+		})
+		assert.Equal(t, http.StatusBadRequest, status)
+	})
+
+	t.Run("invalid time range", func(t *testing.T) {
+		now := time.Now().UnixMilli()
+		status, _ := r.listRootSpans(&workflow.ListRootSpansRequest{
+			WorkflowID: idStr,
+			StartAt:    now,
+			EndAt:      now - 1000,
+		})
+		assert.Equal(t, http.StatusBadRequest, status)
+	})
+
+	t.Run("no access to the workflow space", func(t *testing.T) {
+		// the application service reports errors through the error code of the body,
+		// which is the convention shared with GetProcess
+		status, body := r.listRootSpans(timeRange(&workflow.ListRootSpansRequest{
+			WorkflowID: strconv.FormatInt(otherSpaceID, 10),
+		}))
+		assert.Equal(t, http.StatusOK, status)
+
+		resp := &listRootSpansBody{}
+		assert.NoError(t, sonic.UnmarshalString(body, resp))
+		assert.NotEqual(t, int32(0), resp.Code)
+		assert.Empty(t, resp.Spans)
+	})
+
+	t.Run("empty result", func(t *testing.T) {
+		status, body := r.listRootSpans(timeRange(&workflow.ListRootSpansRequest{
+			WorkflowID: emptyIDStr,
+		}))
+		assert.Equal(t, http.StatusOK, status)
+
+		resp := &listRootSpansBody{}
+		assert.NoError(t, sonic.UnmarshalString(body, resp))
+		assert.Equal(t, int32(0), resp.Code)
+		assert.NotNil(t, resp.Spans)
+		assert.Empty(t, resp.Spans)
+	})
+
+	t.Run("list executions", func(t *testing.T) {
+		status, body := r.listRootSpans(timeRange(&workflow.ListRootSpansRequest{
+			WorkflowID: idStr,
+		}))
+		assert.Equal(t, http.StatusOK, status)
+
+		resp := &listRootSpansBody{}
+		assert.NoError(t, sonic.UnmarshalString(body, resp))
+		assert.Equal(t, int32(0), resp.Code)
+		assert.Equal(t, "", resp.Msg)
+		// the sub workflow execution is filtered out
+		require.Len(t, resp.Spans, 2)
+
+		// descending by created time by default, the id is the tie breaker
+		newest := resp.Spans[0]
+		assert.Equal(t, strconv.FormatInt(runningID, 10), newest.SpanID)
+		assert.Equal(t, "0", newest.ParentID)
+		assert.Equal(t, "Workflow", newest.Type)
+		assert.Equal(t, "list_spans_wf", newest.Name)
+		assert.Equal(t, int32(1), newest.StatusCode)
+		// log id falls back to the span id
+		assert.Equal(t, newest.SpanID, newest.LogID)
+		assert.Equal(t, newest.SpanID, newest.TraceID)
+
+		newestTags := listRootSpansTags(newest)
+		assert.Equal(t, "true", newestTags["is_trigger"].GetVStr())
+		assert.Equal(t, strconv.FormatInt(wfID, 10), newestTags["workflow_id"].GetVStr())
+		assert.Equal(t, newest.SpanID, newestTags["execute_id"].GetVStr())
+		assert.Equal(t, "", newestTags["version"].GetVStr())
+		assert.Equal(t, int64(2), newestTags["mode"].GetVLong())
+		assert.Equal(t, int64(entity.WorkflowRunning), newestTags["status"].GetVLong())
+		assert.Equal(t, int64(2), newestTags["node_count"].GetVLong())
+		// the tag keeps the recorded value, which may be empty
+		assert.Equal(t, "", newestTags["log_id"].GetVStr())
+		assert.Equal(t, "", newestTags["error_code"].GetVStr())
+		assert.Equal(t, newest.StartTime, newestTags["created_at"].GetVLong())
+
+		oldest := resp.Spans[1]
+		assert.Equal(t, strconv.FormatInt(successID, 10), oldest.SpanID)
+		assert.Equal(t, "log-success", oldest.LogID)
+		assert.Equal(t, "log-success", oldest.TraceID)
+		assert.Equal(t, int32(0), oldest.StatusCode)
+		assert.Equal(t, int64(1500), oldest.Duration)
+
+		oldestTags := listRootSpansTags(oldest)
+		assert.Equal(t, "v1.0.0", oldestTags["version"].GetVStr())
+		assert.Equal(t, int64(1), oldestTags["mode"].GetVLong())
+		assert.Equal(t, int64(entity.WorkflowSuccess), oldestTags["status"].GetVLong())
+		assert.Equal(t, int64(4), oldestTags["node_count"].GetVLong())
+		assert.Equal(t, "log-success", oldestTags["log_id"].GetVStr())
+		assert.Equal(t, int64(1500), oldestTags["duration"].GetVLong())
+	})
+
+	t.Run("filter by status and input", func(t *testing.T) {
+		status, body := r.listRootSpans(timeRange(&workflow.ListRootSpansRequest{
+			WorkflowID: idStr,
+			Status:     ptr.Of(workflow.SpanStatus_Success),
+			Input:      ptr.Of("hello"),
+		}))
+		assert.Equal(t, http.StatusOK, status)
+
+		resp := &listRootSpansBody{}
+		assert.NoError(t, sonic.UnmarshalString(body, resp))
+		assert.Equal(t, int32(0), resp.Code)
+		require.Len(t, resp.Spans, 1)
+		assert.Equal(t, strconv.FormatInt(successID, 10), resp.Spans[0].SpanID)
 	})
 }

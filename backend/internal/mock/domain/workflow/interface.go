@@ -582,6 +582,21 @@ func (mr *MockServiceMockRecorder) ListNodeMeta(ctx, nodeTypes any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListNodeMeta", reflect.TypeOf((*MockService)(nil).ListNodeMeta), ctx, nodeTypes)
 }
 
+// ListRootExecutions mocks base method.
+func (m *MockService) ListRootExecutions(ctx context.Context, filter *vo.ListExecutionFilter) ([]*entity.WorkflowExecution, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListRootExecutions", ctx, filter)
+	ret0, _ := ret[0].([]*entity.WorkflowExecution)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListRootExecutions indicates an expected call of ListRootExecutions.
+func (mr *MockServiceMockRecorder) ListRootExecutions(ctx, filter any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListRootExecutions", reflect.TypeOf((*MockService)(nil).ListRootExecutions), ctx, filter)
+}
+
 // MGet mocks base method.
 func (m *MockService) MGet(ctx context.Context, policy *vo.MGetPolicy) ([]*entity.Workflow, int64, error) {
 	m.ctrl.T.Helper()
@@ -1731,6 +1746,21 @@ func (m *MockRepository) ListInterruptEvents(ctx context.Context, wfExeID int64)
 func (mr *MockRepositoryMockRecorder) ListInterruptEvents(ctx, wfExeID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListInterruptEvents", reflect.TypeOf((*MockRepository)(nil).ListInterruptEvents), ctx, wfExeID)
+}
+
+// ListRootExecutions mocks base method.
+func (m *MockRepository) ListRootExecutions(ctx context.Context, filter *vo.ListExecutionFilter) ([]*entity.WorkflowExecution, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListRootExecutions", ctx, filter)
+	ret0, _ := ret[0].([]*entity.WorkflowExecution)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListRootExecutions indicates an expected call of ListRootExecutions.
+func (mr *MockRepositoryMockRecorder) ListRootExecutions(ctx, filter any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListRootExecutions", reflect.TypeOf((*MockRepository)(nil).ListRootExecutions), ctx, filter)
 }
 
 // MDelete mocks base method.
