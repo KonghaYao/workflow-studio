@@ -18,6 +18,7 @@ import { useState } from 'react';
 
 import { I18n } from '@coze-arch/i18n';
 import { Toast } from '@coze-arch/coze-design';
+import { isEmbedded } from '@coze-arch/bot-http';
 import { type PublishWorkflowRequest } from '@coze-arch/bot-api/workflow_api';
 
 import { useGlobalState, useWorkflowOperation } from '@/hooks';
@@ -49,7 +50,15 @@ export const PublishButton = () => {
       duration: 1.5,
     });
 
-    playgroundProps.onPublish?.(globalState);
+    /**
+     * 嵌入宿主 iframe 时发布后**留在原页面**：离开画布的去向由宿主承担（冻结协议不允许 iframe 自行跳转），
+     * 而 OSS 适配层注入的 `onPublish` 实现的正是「返回来源页」——它会跳到 Coze 站内的空间资源库 / 机器人详情页，
+     * 嵌入时那些页面没有会话（首屏请求被宿主透传面 fail-closed 挡成 404），用户看到的是一张空白的报错页。
+     * 独立部署（非嵌入）下行为不变，仍返回来源页。
+     */
+    if (!isEmbedded()) {
+      playgroundProps.onPublish?.(globalState);
+    }
     return published;
   };
 
