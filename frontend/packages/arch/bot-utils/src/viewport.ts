@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+/**
+ * 是否运行在 iframe（宿主）中，即嵌入态；结果按文档生命周期不变。
+ *
+ * 语义与 `@coze-arch/bot-http` 的 `isEmbedded()` 相同，但本包不声明该依赖（同款就地实现见
+ * `packages/arch/tea/src/index.ts`），故各自维护。跨域 / sandbox 下读 `window.top` 可能抛错，
+ * 按「非嵌入」保守处理，不改变独立部署的行为。
+ */
+export const isEmbeddedDocument = (): boolean => {
+  try {
+    return typeof window !== 'undefined' && window.self !== window.top;
+    // eslint-disable-next-line @coze-arch/use-error-in-catch -- 抛错本身就是信号（跨域 / sandbox 拿不到 window.top），无需读取异常对象
+  } catch {
+    return false;
+  }
+};
+
 export const setMobileBody = () => {
   const bodyStyle = document?.body?.style;
   const htmlStyle = document?.getElementsByTagName('html')?.[0]?.style;

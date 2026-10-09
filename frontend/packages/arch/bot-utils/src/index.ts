@@ -65,7 +65,7 @@ export {
   DraftEvent,
   draftEventEmitter,
 } from './event-handler';
-export { setMobileBody, setPCBody } from './viewport';
+export { isEmbeddedDocument, setMobileBody, setPCBody } from './viewport';
 /** Get device information */
 export {
   getIsIPhoneOrIPad,

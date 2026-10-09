@@ -16,13 +16,19 @@
 
 import { useEffect } from 'react';
 
-import { setMobileBody, setPCBody } from '@coze-arch/bot-utils';
+import {
+  isEmbeddedDocument,
+  setMobileBody,
+  setPCBody,
+} from '@coze-arch/bot-utils';
 import { useIsResponsiveByRouteConfig } from '@coze-arch/bot-hooks';
 
 export const useSetResponsiveBodyStyle = () => {
   const isResponsive = useIsResponsiveByRouteConfig();
   useEffect(() => {
-    if (isResponsive) {
+    // 嵌入宿主 iframe 时文档尺寸归宿主容器管（宿主窗口可能窄于 1200px，画布必须随容器收缩），
+    // 故与移动端一样不施加 PC 端的 1200×600 下限；独立部署仍走 setPCBody，行为不变。
+    if (isResponsive || isEmbeddedDocument()) {
       setMobileBody();
     } else {
       setPCBody();
