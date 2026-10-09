@@ -23,6 +23,13 @@ const API_PROXY_TARGET = `http://localhost:${
   process.env.WEB_SERVER_PORT || 8888
 }/`;
 
+/**
+ * 开发态 dev server 端口。共享配置（config/rsbuild-config）把 server.port 与 dev.client.port
+ * 固定为 8080；本机 8080 常被其它服务占用，改用环境变量统一覆盖两者，否则 HMR websocket
+ * 会连到与 API 端口不一致的地址（默认值 8080 与改造前一致）。
+ */
+const devServerPort = Number(process.env.DEV_SERVER_PORT) || 8080;
+
 /** 归一化为「前导斜杠 + 结尾斜杠」的路径前缀；未设置或为 '/' 时返回 '/'。 */
 const normalizeWorkflowCanvasBase = (raw: string | undefined): string => {
   const trimmed = (raw ?? '').trim();
@@ -51,6 +58,7 @@ const WORKFLOW_BFF_PROXY_TARGET =
 
 const mergedConfig = defineConfig({
   server: {
+    port: devServerPort,
     strictPort: true,
     proxy: [
       {
@@ -83,6 +91,18 @@ const mergedConfig = defineConfig({
   output: {
     // 子路径挂载时静态资源（含 favicon、动态 chunk）必须带同一前缀，否则 404 白屏。
     assetPrefix: workflowCanvasBase,
+  },
+  dev: {
+    // rsbuild 开发态默认不启用资源前缀（`dev.assetPrefix` 默认 false），此时 HTML 里的资源 URL
+    // 是根相对路径，浏览器按不带前缀的地址回程请求，宿主只反代 /workflow-canvas/* 时必然 404。
+    // 注意：此处只接受布尔值或字符串——boolean true 表示「dev server 的绝对 URL」，
+    // 传字符串才是「原样作为 publicPath」；宿主反代场景需要后者，故直接传 workflowCanvasBase。
+    // 根路径挂载时保持 false，dev 行为与改造前一致。
+    assetPrefix: workflowCanvasBase === '/' ? false : workflowCanvasBase,
+    client: {
+      // 共享配置把 dev.client.port 固定为 8080（HMR websocket），与本 app 的 server.port 同源覆盖。
+      port: devServerPort,
+    },
   },
   tools: {
     postcss: (opts, { addPlugins }) => {
