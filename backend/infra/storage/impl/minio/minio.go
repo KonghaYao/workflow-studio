@@ -30,6 +30,7 @@ import (
 
 	"github.com/coze-dev/coze-studio/backend/infra/storage"
 	"github.com/coze-dev/coze-studio/backend/infra/storage/impl/internal/fileutil"
+	"github.com/coze-dev/coze-studio/backend/infra/storage/impl/internal/urlbase"
 	"github.com/coze-dev/coze-studio/backend/pkg/logs"
 )
 
@@ -234,7 +235,8 @@ func (m *minioClient) GetObjectUrl(ctx context.Context, objectKey string, opts .
 		return "", fmt.Errorf("GetObjectUrl failed: %v", err)
 	}
 
-	return presignedURL.String(), nil
+	// 签名绑定的是 MINIO_ENDPOINT（通常仅集群内可解析），按配置换成客户端可达基址。
+	return urlbase.Apply(presignedURL.String()), nil
 }
 
 func (m *minioClient) ListObjectsPaginated(ctx context.Context, input *storage.ListObjectsPaginatedInput, opts ...storage.GetOptFn) (*storage.ListObjectsPaginatedOutput, error) {

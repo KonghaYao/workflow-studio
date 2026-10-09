@@ -34,6 +34,10 @@ const (
 	FileUploadComponentTypeStorage = "storage"
 	StorageUploadHTTPScheme        = "STORAGE_UPLOAD_HTTP_SCHEME"
 
+	// StorageClientURLBase 是签发给客户端的对象 URL 基址（绝对地址或根相对前缀）；
+	// 留空时按 MINIO_ENDPOINT 的绝对地址签发，行为与改造前一致。见 infra/storage/impl/internal/urlbase。
+	StorageClientURLBase = "STORAGE_CLIENT_URL_BASE"
+
 	StorageType        = "STORAGE_TYPE"
 	MinIOAK            = "MINIO_AK"
 	MinIOSK            = "MINIO_SK"
