@@ -3550,6 +3550,31 @@ func TestListRootSpans(t *testing.T) {
 		assert.Equal(t, int64(1500), oldestTags["duration"].GetVLong())
 	})
 
+	t.Run("limit and ascending order", func(t *testing.T) {
+		status, body := r.listRootSpans(timeRange(&workflow.ListRootSpansRequest{
+			WorkflowID: idStr,
+			Limit:      ptr.Of(int16(1)),
+		}))
+		assert.Equal(t, http.StatusOK, status)
+
+		resp := &listRootSpansBody{}
+		assert.NoError(t, sonic.UnmarshalString(body, resp))
+		// the limit bounds the result, descending order keeps the newest execution
+		require.Len(t, resp.Spans, 1)
+		assert.Equal(t, strconv.FormatInt(runningID, 10), resp.Spans[0].SpanID)
+
+		status, body = r.listRootSpans(timeRange(&workflow.ListRootSpansRequest{
+			WorkflowID:      idStr,
+			DescByStartTime: ptr.Of(false),
+		}))
+		assert.Equal(t, http.StatusOK, status)
+
+		assert.NoError(t, sonic.UnmarshalString(body, resp))
+		require.Len(t, resp.Spans, 2)
+		// ascending order keeps the oldest execution first
+		assert.Equal(t, strconv.FormatInt(successID, 10), resp.Spans[0].SpanID)
+	})
+
 	t.Run("filter by status and input", func(t *testing.T) {
 		status, body := r.listRootSpans(timeRange(&workflow.ListRootSpansRequest{
 			WorkflowID: idStr,
