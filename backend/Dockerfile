@@ -56,6 +56,14 @@ COPY backend/infra/coderunner/impl/script/sandbox.py /app/sandbox.py
 # COPY backend/static /app/resources/static/
 COPY backend/conf /app/resources/conf/
 COPY docker/.env.example /app/.env
+
+# 部署初始化资产：schema.sql / Atlas HCL / ES 插件与索引模板 / etcd 配置 / 画布图标。
+# 这些文件原先只存在于源码目录、由下游挂载使用，导致下游部署必须 clone 本仓库；打进镜像后
+# 下游可直接凭镜像交付：启动前用一次性步骤把它们展开到宿主目录（`docker create` + `cp -a`，
+# 或在编排里加一个只挂宿主目录的一次性服务——AOS 的 docker/workflow/ 即后者），资产与二进制天然同 commit。
+# 只拷 volumes/ 与 atlas/：docker/data 是运行期数据，compose 与 README 不参与部署。
+COPY docker/volumes /app/upstream-assets/docker/volumes
+COPY docker/atlas /app/upstream-assets/docker/atlas
 # COPY docker/.env.ve /app/.env
 # COPY docker/cert.pem /app/cert.pem
 # COPY docker/key.pem /app/key.pem
